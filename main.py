@@ -109,8 +109,10 @@ async def mux(video: UploadFile = File(...), subtitles: UploadFile = File(...)):
             # Retry by converting audio only; the video stream remains untouched.
             if "FFmpeg" in str(first_error.detail) or first_error.status_code == 422:
                 retry = command.copy()
-                retry[retry.index("-c:a") + 1] = "aac"
-                retry[retry.index("-c:a") + 2] = "192k"
+                audio_index = retry.index("-c:a")
+                retry[audio_index + 1] = "aac"
+                retry.insert(audio_index + 2, "-b:a")
+                retry.insert(audio_index + 3, "192k")
                 run(retry)
             else:
                 raise
