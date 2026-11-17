@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).parent
 MAX_UPLOAD_BYTES = int(float(os.getenv("MAX_UPLOAD_GB", "12")) * 1024**3)
 CHUNK_SIZE = 1024 * 1024
 VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm"}
-SUBTITLE_EXTENSIONS = {".srt", ".vtt"}
+SUBTITLE_EXTENSIONS = {".srt", ".vtt", ".txt"}
 
 
 def safe_name(value: str) -> str:
@@ -54,6 +54,25 @@ def run(command: list[str], timeout: int = 8 * 60 * 60):
     return result
 
 
+def normalize_subtitle_file(path: Path) -> Path:
+    """Accept SRT/VTT text even when the uploaded filename ends in .txt."""
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as source:
+            sample = source.read(65536)
+    except OSError:
+        raise HTTPException(400, "Could not read the subtitle text file.")
+
+    if sample.lstrip().startswith("WEBVTT"):
+        target = path.with_suffix(".vtt")
+    elif re.search(r"(?m)^\s*\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}", sample):
+        target = path.with_suffix(".srt")
+    else:
+        raise HTTPException(400, "The .txt file must contain SRT or WebVTT subtitles, including timestamp lines.")
+    if target != path:
+        path.rename(target)
+    return target
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return (BASE_DIR / "index.html").read_text(encoding="utf-8")
@@ -74,7 +93,7 @@ async def mux(video: UploadFile = File(...), subtitles: UploadFile = File(...)):
     if video_ext not in VIDEO_EXTENSIONS:
         raise HTTPException(400, "Choose a supported video file: MP4, M4V, MOV, MKV or WebM.")
     if subtitle_ext not in SUBTITLE_EXTENSIONS:
-        raise HTTPException(400, "Choose an SRT or WebVTT subtitle file.")
+        raise HTTPException(400, "Choose an SRT, WebVTT, or plain .txt subtitle file containing SRT/WebVTT text.")
 
     workdir = Path(tempfile.mkdtemp(prefix="ytvault-"))
     input_video = workdir / f"source{video_ext}"
@@ -84,6 +103,7 @@ async def mux(video: UploadFile = File(...), subtitles: UploadFile = File(...)):
     try:
         await save_upload(video, input_video)
         await save_upload(subtitles, input_subs)
+        input_subs = normalize_subtitle_file(input_subs)
 
         probe = run([
             "ffprobe", "-v", "error", "-select_streams", "v:0",
